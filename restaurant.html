@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <title>لوحة تحكم المطعم - الطلبات الواردة</title>
+    <style>
+        body { font-family: sans-serif; background: #eef2f5; margin: 0; padding: 30px; }
+        .header { background: #1e293b; color: white; padding: 20px 30px; border-radius: 10px; display: flex; justify-content: space-between; align-items: center; }
+        .btn-refresh { background: #3b82f6; color: white; border: none; padding: 10px 20px; border-radius: 6px; cursor: pointer; font-weight: bold; }
+        .orders-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 20px; margin-top: 30px; }
+        .order-card { background: white; padding: 20px; border-radius: 12px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); border-top: 5px solid #f59e0b; }
+        .order-id { font-size: 18px; font-weight: bold; color: #1e293b; margin-bottom: 10px; }
+        .info { margin: 6px 0; color: #475569; font-size: 15px; }
+        .status-badge { display: inline-block; padding: 6px 12px; border-radius: 20px; background: #fef3c7; color: #b45309; font-weight: bold; font-size: 14px; margin: 10px 0; }
+        .btn-ready { width: 100%; background: #10b981; color: white; border: none; padding: 12px; border-radius: 8px; font-size: 15px; font-weight: bold; cursor: pointer; margin-top: 10px; }
+        .btn-ready:hover { background: #059669; }
+        .ready { border-top-color: #10b981; }
+        .ready .status-badge { background: #d1fae5; color: #065f46; }
+    </style>
+</head>
+<body>
+
+    <div class="header">
+        <h2>👨‍🍳 شاشة مطبخ المطعم (الطلبات المباشرة)</h2>
+        <button class="btn-refresh" onclick="loadOrders()">🔄 تحديث الطلبات</button>
+    </div>
+
+    <div class="orders-grid" id="ordersContainer">
+        <!-- هنا ستظهر بطاقات الطلبات تلقائياً -->
+    </div>
+
+    <script>
+        async function loadOrders() {
+            const container = document.getElementById('ordersContainer');
+            try {
+                const res = await fetch('http://localhost:5000/api/orders');
+                const data = await res.json();
+                
+                if (data.orders.length === 0) {
+                    container.innerHTML = '<p style="color:#64748b; font-size:18px;">لا توجد أي طلبات حالياً في الانتظار... ☕</p>';
+                    return;
+                }
+
+                container.innerHTML = '';
+                data.orders.forEach(order => {
+                    const isReady = order.status.includes("جاهز");
+                    container.innerHTML += `
+                        <div class="order-card ${isReady ? 'ready' : ''}">
+                            <div class="order-id">طلب رقم: #${order.orderId}</div>
+                            <div class="info">👤 <b>الزبون:</b> ${order.customerName} (${order.phone})</div>
+                            <div class="info">🍔 <b>الوجبة:</b> ${order.mealName}</div>
+                            <div class="info">📍 <b>العنوان:</b> ${order.address}</div>
+                            <div class="info">💰 <b>السعر:</b> ${order.totalPrice}</div>
+                            <div class="status-badge">${order.status}</div>
+                            ${!isReady ? `<button class="btn-ready" onclick="markAsReady(${order.orderId})">✅ الوجبة جاهزة، استدعاء المندوب 🛵</button>` : ''}
+                        </div>
+                    `;
+                });
+            } catch (err) {
+                container.innerHTML = '<p style="color:red;">تعذر الاتصال بالسيرفر! تأكد من تشغيله.</p>';
+            }
+        }
+
+        async function markAsReady(orderId) {
+            await fetch(`http://localhost:5000/api/orders/${orderId}/status`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ newStatus: "الوجبة جاهزة بانتظار استلام المندوب 🛵" })
+            });
+            loadOrders(); // إعادة تحميل الصفحة لرؤية الحالة الجديدة فوراً
+        }
+
+        // تحميل الطلبات فور فتح الصفحة وتحديثها تلقائياً كل 4 ثوانٍ
+        loadOrders();
+        setInterval(loadOrders, 4000);
+    </script>
+</body>
+</html>

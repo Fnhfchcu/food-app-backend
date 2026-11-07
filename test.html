@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <title>تطبيق تجربة طلب الطعام</title>
+    <style>
+        body { font-family: sans-serif; background: #f4f7f6; display: flex; justify-content: center; padding: 40px; }
+        .card { background: white; padding: 25px; border-radius: 12px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); width: 350px; }
+        h2 { color: #e63946; margin-top: 0; }
+        label { display: block; margin: 10px 0 5px; font-weight: bold; }
+        input { width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 6px; box-sizing: border-box; }
+        button { width: 100%; background: #e63946; color: white; border: none; padding: 12px; border-radius: 6px; font-size: 16px; font-weight: bold; cursor: pointer; margin-top: 15px; }
+        button:hover { background: #d62828; }
+        #result { margin-top: 15px; padding: 10px; border-radius: 6px; display: none; }
+    </style>
+</head>
+<body>
+
+<div class="card">
+    <h2>🍔 طلب وجبة سريعة</h2>
+    <label>اسم الزبون:</label>
+    <input type="text" id="name" value="أحمد الجزائري">
+
+    <label>رقم الهاتف:</label>
+    <input type="text" id="phone" value="0550123456">
+
+    <label>الوجبة:</label>
+    <input type="text" id="meal" value="برجر دجاج مقرمش + بطاطا">
+
+    <label>العنوان:</label>
+    <input type="text" id="address" value="حي الزهور، الجزائر العاصمة">
+
+    <label>السعر الإجمالي:</label>
+    <input type="text" id="price" value="750 د.ج">
+
+    <button onclick="sendOrder()">🚀 إتمام الطلب الآن</button>
+
+    <div id="result"></div>
+</div>
+
+<script>
+    async function sendOrder() {
+        const orderData = {
+            customerName: document.getElementById('name').value,
+            phone: document.getElementById('phone').value,
+            mealName: document.getElementById('meal').value,
+            address: document.getElementById('address').value,
+            totalPrice: document.getElementById('price').value
+        };
+
+        const response = await fetch('http://localhost:5000/api/orders', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(orderData)
+        });
+
+        const data = await response.json();
+        const resDiv = document.getElementById('result');
+        resDiv.style.display = 'block';
+
+        if (data.success) {
+            resDiv.style.background = '#d4edda';
+            resDiv.style.color = '#155724';
+            resDiv.innerHTML = `<b>${data.message}</b><br>رقم الطلب: #${data.order.orderId}<br>الحالة: ${data.order.status}`;
+        } else {
+            resDiv.style.background = '#f8d7da';
+            resDiv.style.color = '#721c24';
+            resDiv.innerText = data.message;
+        }
+    }
+</script>
+
+</body>
+</html>

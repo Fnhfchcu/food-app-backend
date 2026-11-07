@@ -1,0 +1,13 @@
+{
+  "users": [
+    {
+      "id": 1,
+      "name": "سيقفاسثقغا",
+      "phone": "0562325566",
+      "password": "$2b$10$iZ802wlNkStyaQ2WyKsiE.wgz5InfSMzjX4V5vom/u2hLtkSW9lpS",
+      "role": "customer",
+      "createdAt": "2026-11-07T19:13:10.641Z"
+    }
+  ],
+  "orders": []
+}
