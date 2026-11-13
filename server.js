@@ -11,7 +11,8 @@ const JWT_SECRET = "super_secret_food_delivery_app_2026";
 const DB_FILE = path.join(__dirname, 'database.json');
 
 app.use(cors());
-app.use(express.json());
+app.use(express.json({ limit: '10mb' }));
+app.use(express.urlencoded({ limit: '10mb', extended: true }));
 
 function readDB() {
     if (!fs.existsSync(DB_FILE)) {
@@ -103,15 +104,15 @@ app.post('/api/auth/login', async (req, res) => {
         if (!isMatch) {
             return res.status(400).json({ success: false, message: "رقم الهاتف أو كلمة المرور غير صحيحة." });
         }
-  
-       // 🛑 فحص صارم: أي مطعم أو سائق بدون موافقة صريحة true يُمنع فوراً
-if ((user.role === 'restaurant' || user.role === 'driver') && user.isApproved !== true) {
-    return res.status(403).json({
-        success: false,
-        isPending: true,
-        message: "عذراً! حسابك لا يزال قيد المراجعة والتحقق من طرف إدارة زادلي ⏳"
-    });
-}
+
+        // 🛑 فحص هل الحساب مفعل من الإدارة أم ما زال معلقاً
+        if (user.isApproved === false) {
+            return res.status(403).json({
+                success: false,
+                isPending: true,
+                message: "عذراً! حسابك لا يزال قيد المراجعة والتحقق من طرف إدارة زادلي ⏳"
+            });
+        }
 
         const token = jwt.sign(
             { id: user.id, name: user.name, role: user.role },
