@@ -10,10 +10,12 @@ const PORT = process.env.PORT || 5000;
 const JWT_SECRET = "super_secret_food_delivery_app_2026";
 const DB_FILE = path.join(__dirname, 'database.json');
 
+// إعدادات استقبال البيانات والصور الكبيرة حتى 25 ميغابايت
 app.use(cors());
 app.use(express.json({ limit: '25mb' }));
 app.use(express.urlencoded({ limit: '25mb', extended: true }));
 
+// قراءة قاعدة البيانات المحلية
 function readDB() {
     if (!fs.existsSync(DB_FILE)) {
         const initialData = { users: [], orders: [], meals: [] };
@@ -24,10 +26,12 @@ function readDB() {
     return JSON.parse(data);
 }
 
+// حفظ البيانات
 function writeDB(data) {
     fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2));
 }
 
+// وجبات أولية تظهر افتراضياً
 const defaultMeals = [
     {
         "id": 1,
@@ -68,16 +72,29 @@ const defaultMeals = [
 ];
 
 // ==========================================
-// 1. مسارات الحسابات
+// 1. مسار لوحة الإدارة أونلاين
+// ==========================================
+app.get('/admin', (req, res) => {
+    const adminPath = path.join(__dirname, 'admin.html');
+    if (fs.existsSync(adminPath)) {
+        res.sendFile(adminPath);
+    } else {
+        res.send("لوحة الإدارة: يرجى التأكد من رفع ملف admin.html في السيرفر.");
+    }
+});
+
+// ==========================================
+// 2. مسارات الحسابات والأمان (Auth)
 // ==========================================
 
+// تسجيل حساب عادي
 app.post('/api/auth/register', async (req, res) => {
     try {
         const { name, phone, password, role, extraInfo } = req.body;
-        if (!name || !phone || !password) return res.status(400).json({ success: false, message: "بيانات ناقصة" });
+        if (!name || !phone || !password) return res.status(400).json({ success: false, message: "بيانات ناقصة!" });
 
         const db = readDB();
-        if (db.users.find(u => u.phone === phone)) return res.status(400).json({ success: false, message: "الهاتف مسجل مسبقاً!" });
+        if (db.users.find(u => u.phone === phone)) return res.status(400).json({ success: false, message: "رقم الهاتف مسجل مسبقاً!" });
 
         const hashedPassword = await bcrypt.hash(password, 10);
         const assignedRole = role || 'customer';
@@ -100,13 +117,14 @@ app.post('/api/auth/register', async (req, res) => {
         res.status(201).json({
             success: true,
             isPending: !isApproved,
-            message: isApproved ? "تم إنشاء الحساب بنجاح!" : "تم تسجيل طلبك وهو قيد المراجعة!"
+            message: isApproved ? "تم إنشاء الحساب بنجاح!" : "تم تسجيل طلبك وهو قيد مراجعة الإدارة!"
         });
     } catch (err) {
         res.status(500).json({ success: false, message: "خطأ: " + err.message });
     }
 });
 
+// تسجيل دخول عادي
 app.post('/api/auth/login', async (req, res) => {
     try {
         const { phone, password } = req.body;
@@ -117,6 +135,7 @@ app.post('/api/auth/login', async (req, res) => {
             return res.status(400).json({ success: false, message: "رقم الهاتف أو كلمة المرور غير صحيحة." });
         }
 
+        // فحص هل السائق أو المطعم حاصل على موافقة الإدارة
         if ((user.role === 'restaurant' || user.role === 'driver') && user.isApproved !== true) {
             return res.status(403).json({
                 success: false,
@@ -136,8 +155,45 @@ app.post('/api/auth/login', async (req, res) => {
     }
 });
 
+// 🇬 مسار الدخول الفوري عبر Google (Google 1-Tap Login)
+app.post('/api/auth/google-login', async (req, res) => {
+    try {
+        const { email, name, googleId } = req.body;
+        const db = readDB();
+
+        let user = db.users.find(u => u.email === email || (u.extraInfo && u.extraInfo.googleId === googleId));
+
+        if (!user) {
+            // مستخدم جديد يسجل بـ Google يتم تفعيله كزبون فوراً
+            user = {
+                id: db.users.length + 1,
+                name: name || "مستخدم Google",
+                phone: email,
+                email: email,
+                password: "google_secured_login",
+                role: 'customer',
+                isApproved: true,
+                extraInfo: { googleId: googleId, authProvider: 'google' },
+                createdAt: new Date().toISOString()
+            };
+            db.users.push(user);
+            writeDB(db);
+        }
+
+        const token = jwt.sign({ id: user.id, name: user.name, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
+        res.json({
+            success: true,
+            message: `أهلاً بك يا ${user.name}! تم الدخول بنجاح عبر Google.`,
+            token,
+            user: { id: user.id, name: user.name, phone: user.phone, role: user.role }
+        });
+    } catch (err) {
+        res.status(500).json({ success: false, message: "فشل الدخول بـ Google: " + err.message });
+    }
+});
+
 // ==========================================
-// 2. مسارات الإدارة والمنيو
+// 3. مسارات لوحة الإدارة (Admin API)
 // ==========================================
 
 app.get('/api/admin/pending-users', (req, res) => {
@@ -156,6 +212,10 @@ app.put('/api/admin/approve-user/:id', (req, res) => {
     writeDB(db);
     res.json({ success: true, message: `تم تفعيل حساب ${user.name} بنجاح! ✅` });
 });
+
+// ==========================================
+// 4. مسارات قائمة المأكولات الحية (Meals)
+// ==========================================
 
 app.get('/api/meals', (req, res) => {
     const db = readDB();
@@ -187,33 +247,32 @@ app.post('/api/meals', (req, res) => {
 
         db.meals.unshift(newMeal);
         writeDB(db);
-        res.status(201).json({ success: true, message: "تمت إضافة الوجبة للمنيو!", meal: newMeal });
+        res.status(201).json({ success: true, message: "تمت إضافة الوجبة للمنيو بنجاح!", meal: newMeal });
     } catch (err) {
         res.status(500).json({ success: false, message: "فشل إضافة الوجبة" });
     }
 });
 
 // ==========================================
-// 3. مسارات الطلبات مع كود الاستلام والتقسيم المالي
+// 5. مسارات الطلبات وكود الاستلام والتقسيم المالي
 // ==========================================
 
 app.post('/api/orders', (req, res) => {
     const { customerName, phone, mealName, address, totalPrice, restaurantPhone } = req.body;
     const db = readDB();
 
-    // استخراج السعر وحساب التقسيم المالي
     const rawPrice = parseInt(totalPrice) || 750;
-    const deliveryFee = 200; // أجر التوصيل للكابتن
-    const platformFee = 50;  // عمولة منصة زادلي
-    const restaurantNet = rawPrice - platformFee; // صافي دخل المطعم
-    const totalCashToCollect = rawPrice + deliveryFee; // كاش المطلوب تحصيله من الزبون
+    const deliveryFee = 200;
+    const platformFee = 50;
+    const restaurantNet = rawPrice - platformFee;
+    const totalCashToCollect = rawPrice + deliveryFee;
 
-    // كود تحقق سري من 4 أرقام
+    // كود استلام سري من 4 أرقام
     const pickupCode = Math.floor(1000 + Math.random() * 9000).toString();
 
     const newOrder = {
         orderId: db.orders.length + 1,
-        pickupCode: pickupCode, // 👈 كود الاستلام السري
+        pickupCode: pickupCode,
         customerName,
         phone,
         mealName,
@@ -242,7 +301,6 @@ app.get('/api/orders', (req, res) => {
     res.json({ orders: db.orders });
 });
 
-// مسار التحقق من كود الاستلام وتأكيد تسليم المطبخ للمندوب
 app.put('/api/orders/:id/pickup-verify', (req, res) => {
     const orderId = parseInt(req.params.id);
     const { enteredCode, driverName, driverPhone } = req.body;
@@ -251,7 +309,6 @@ app.put('/api/orders/:id/pickup-verify', (req, res) => {
     const order = db.orders.find(o => o.orderId === orderId);
     if (!order) return res.status(404).json({ success: false, message: "الطلب غير موجود!" });
 
-    // مطابقة كود الاستلام السري
     if (order.pickupCode !== enteredCode.toString().trim()) {
         return res.status(400).json({ success: false, message: "❌ كود الاستلام غير صحيح! يرجى التأكد من المطعم." });
     }
@@ -277,7 +334,10 @@ app.put('/api/orders/:id/status', (req, res) => {
     res.json({ success: true, order });
 });
 
-app.get('/', (req, res) => res.json({ message: "سيرفر زادلي شغال بنظام كود الاستلام والربط المالي بين المطعم والسائق 🚀" }));
+// فحص جاهزية السيرفر
+app.get('/', (req, res) => {
+    res.json({ message: "سيرفر زادلي شغال ومطور بنظام إدارة الصلاحيات والمنيو الحي ودخول Google 🚀" });
+});
 
 app.listen(PORT, () => {
     console.log(`🚀 السيرفر شغال بنجاح على المنفذ: ${PORT}`);
