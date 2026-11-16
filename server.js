@@ -28,7 +28,6 @@ function writeDB(data) {
     fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2));
 }
 
-// الوجبات الافتراضية الأولية
 const defaultMeals = [
     {
         "id": 1,
@@ -39,7 +38,8 @@ const defaultMeals = [
         "time": "20-30 دقيقة ⏱️",
         "desc": "شريحة لحم بقري محلي مع جبنة شيدر ذائبة وصوص زادلي الخاص",
         "image": "https://images.unsplash.com/photo-1568901346375-23c9450c58cd?w=600",
-        "restaurantName": "برجر كينغستار"
+        "restaurantName": "برجر كينغستار",
+        "restaurantPhone": "0550112233"
     },
     {
         "id": 2,
@@ -50,7 +50,8 @@ const defaultMeals = [
         "time": "25-35 دقيقة ⏱️",
         "desc": "عجينة إيطالية هشة ومخمرة مع جبن الموزاريلا الفاخر والريحان",
         "image": "https://images.unsplash.com/photo-1513104890138-7c749659a591?w=600",
-        "restaurantName": "بيتزا روما"
+        "restaurantName": "بيتزا روما",
+        "restaurantPhone": "0550445566"
     },
     {
         "id": 3,
@@ -61,30 +62,24 @@ const defaultMeals = [
         "time": "15-20 دقيقة ⏱️",
         "desc": "محشو بالدجاج المتبل والبطاطا المقلية مع صلصة الجبن الغنية",
         "image": "https://images.unsplash.com/photo-1565299585323-38d6b0865b47?w=600",
-        "restaurantName": "تاكوس ديزاد"
+        "restaurantName": "تاكوس ديزاد",
+        "restaurantPhone": "0550778899"
     }
 ];
 
 // ==========================================
-// 1. مسارات الحسابات والأمان
+// 1. مسارات الحسابات
 // ==========================================
 
 app.post('/api/auth/register', async (req, res) => {
     try {
         const { name, phone, password, role, extraInfo } = req.body;
-
-        if (!name || !phone || !password) {
-            return res.status(400).json({ success: false, message: "يرجى ملء جميع الحقول الأساسية." });
-        }
+        if (!name || !phone || !password) return res.status(400).json({ success: false, message: "بيانات ناقصة" });
 
         const db = readDB();
-        const existingUser = db.users.find(u => u.phone === phone);
-        if (existingUser) {
-            return res.status(400).json({ success: false, message: "رقم الهاتف هذا مسجل مسبقاً بالفعل!" });
-        }
+        if (db.users.find(u => u.phone === phone)) return res.status(400).json({ success: false, message: "الهاتف مسجل مسبقاً!" });
 
-        const salt = await bcrypt.genSalt(10);
-        const hashedPassword = await bcrypt.hash(password, salt);
+        const hashedPassword = await bcrypt.hash(password, 10);
         const assignedRole = role || 'customer';
         const isApproved = (assignedRole === 'customer');
 
@@ -102,21 +97,13 @@ app.post('/api/auth/register', async (req, res) => {
         db.users.push(newUser);
         writeDB(db);
 
-        if (!isApproved) {
-            return res.status(201).json({
-                success: true,
-                isPending: true,
-                message: "تم تسجيل طلبك بنجاح! حسابك قيد المراجعة من طرف إدارة زادلي."
-            });
-        }
-
         res.status(201).json({
             success: true,
-            isPending: false,
-            message: "تم إنشاء حسابك بنجاح!"
+            isPending: !isApproved,
+            message: isApproved ? "تم إنشاء الحساب بنجاح!" : "تم تسجيل طلبك وهو قيد المراجعة!"
         });
     } catch (err) {
-        res.status(500).json({ success: false, message: "حدث خطأ: " + err.message });
+        res.status(500).json({ success: false, message: "خطأ: " + err.message });
     }
 });
 
@@ -126,12 +113,7 @@ app.post('/api/auth/login', async (req, res) => {
         const db = readDB();
 
         const user = db.users.find(u => u.phone === phone);
-        if (!user) {
-            return res.status(400).json({ success: false, message: "رقم الهاتف أو كلمة المرور غير صحيحة." });
-        }
-
-        const isMatch = await bcrypt.compare(password, user.password);
-        if (!isMatch) {
+        if (!user || !(await bcrypt.compare(password, user.password))) {
             return res.status(400).json({ success: false, message: "رقم الهاتف أو كلمة المرور غير صحيحة." });
         }
 
@@ -143,25 +125,19 @@ app.post('/api/auth/login', async (req, res) => {
             });
         }
 
-        const token = jwt.sign(
-            { id: user.id, name: user.name, role: user.role },
-            JWT_SECRET,
-            { expiresIn: '7d' }
-        );
-
+        const token = jwt.sign({ id: user.id, name: user.name, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
         res.json({
             success: true,
-            message: `أهلاً بك يا ${user.name}!`,
             token,
             user: { id: user.id, name: user.name, phone: user.phone, role: user.role }
         });
     } catch (err) {
-        res.status(500).json({ success: false, message: "حدث خطأ: " + err.message });
+        res.status(500).json({ success: false, message: "خطأ: " + err.message });
     }
 });
 
 // ==========================================
-// 2. مسارات لوحة الإدارة (Admin)
+// 2. مسارات الإدارة والمنيو
 // ==========================================
 
 app.get('/api/admin/pending-users', (req, res) => {
@@ -173,21 +149,13 @@ app.get('/api/admin/pending-users', (req, res) => {
 app.put('/api/admin/approve-user/:id', (req, res) => {
     const userId = parseInt(req.params.id);
     const db = readDB();
-
     const user = db.users.find(u => u.id === userId);
-    if (!user) {
-        return res.status(404).json({ success: false, message: "المستخدم غير موجود!" });
-    }
+    if (!user) return res.status(404).json({ success: false, message: "المستخدم غير موجود" });
 
     user.isApproved = true;
     writeDB(db);
-
-    res.json({ success: true, message: `تم تفعيل حساب ${user.name} (${user.role}) بنجاح! ✅` });
+    res.json({ success: true, message: `تم تفعيل حساب ${user.name} بنجاح! ✅` });
 });
-
-// ==========================================
-// 3. مسارات المنيو وقائمة الوجبات الحية
-// ==========================================
 
 app.get('/api/meals', (req, res) => {
     const db = readDB();
@@ -200,7 +168,7 @@ app.get('/api/meals', (req, res) => {
 
 app.post('/api/meals', (req, res) => {
     try {
-        const { name, price, category, desc, image, restaurantName } = req.body;
+        const { name, price, category, desc, image, restaurantName, restaurantPhone } = req.body;
         const db = readDB();
         if (!db.meals) db.meals = defaultMeals;
 
@@ -213,33 +181,52 @@ app.post('/api/meals', (req, res) => {
             image: image || "https://images.unsplash.com/photo-1568901346375-23c9450c58cd?w=600",
             rating: "جديد ⭐",
             time: "20-30 دقيقة ⏱️",
-            restaurantName: restaurantName || "مطعم شريك"
+            restaurantName: restaurantName || "مطعم شريك",
+            restaurantPhone: restaurantPhone || "0550000000"
         };
 
         db.meals.unshift(newMeal);
         writeDB(db);
-
-        res.status(201).json({ success: true, message: "تمت إضافة الوجبة للمنيو بنجاح!", meal: newMeal });
+        res.status(201).json({ success: true, message: "تمت إضافة الوجبة للمنيو!", meal: newMeal });
     } catch (err) {
         res.status(500).json({ success: false, message: "فشل إضافة الوجبة" });
     }
 });
 
 // ==========================================
-// 4. مسارات الطلبات
+// 3. مسارات الطلبات مع كود الاستلام والتقسيم المالي
 // ==========================================
 
 app.post('/api/orders', (req, res) => {
-    const { customerName, phone, mealName, address, totalPrice } = req.body;
+    const { customerName, phone, mealName, address, totalPrice, restaurantPhone } = req.body;
     const db = readDB();
+
+    // استخراج السعر وحساب التقسيم المالي
+    const rawPrice = parseInt(totalPrice) || 750;
+    const deliveryFee = 200; // أجر التوصيل للكابتن
+    const platformFee = 50;  // عمولة منصة زادلي
+    const restaurantNet = rawPrice - platformFee; // صافي دخل المطعم
+    const totalCashToCollect = rawPrice + deliveryFee; // كاش المطلوب تحصيله من الزبون
+
+    // كود تحقق سري من 4 أرقام
+    const pickupCode = Math.floor(1000 + Math.random() * 9000).toString();
 
     const newOrder = {
         orderId: db.orders.length + 1,
+        pickupCode: pickupCode, // 👈 كود الاستلام السري
         customerName,
         phone,
         mealName,
         address,
-        totalPrice: totalPrice || "750 د.ج",
+        totalPrice: `${totalCashToCollect} د.ج`,
+        financials: {
+            mealPrice: `${rawPrice} د.ج`,
+            restaurantNet: `${restaurantNet} د.ج`,
+            driverFee: `${deliveryFee} د.ج`,
+            totalCash: `${totalCashToCollect} د.ج`
+        },
+        restaurantPhone: restaurantPhone || "0550112233",
+        assignedDriver: null,
         status: "قيد التحضير في المطبخ 👨‍🍳",
         time: new Date().toLocaleTimeString('ar-DZ')
     };
@@ -253,6 +240,27 @@ app.post('/api/orders', (req, res) => {
 app.get('/api/orders', (req, res) => {
     const db = readDB();
     res.json({ orders: db.orders });
+});
+
+// مسار التحقق من كود الاستلام وتأكيد تسليم المطبخ للمندوب
+app.put('/api/orders/:id/pickup-verify', (req, res) => {
+    const orderId = parseInt(req.params.id);
+    const { enteredCode, driverName, driverPhone } = req.body;
+    const db = readDB();
+
+    const order = db.orders.find(o => o.orderId === orderId);
+    if (!order) return res.status(404).json({ success: false, message: "الطلب غير موجود!" });
+
+    // مطابقة كود الاستلام السري
+    if (order.pickupCode !== enteredCode.toString().trim()) {
+        return res.status(400).json({ success: false, message: "❌ كود الاستلام غير صحيح! يرجى التأكد من المطعم." });
+    }
+
+    order.status = "المندوب استلم الوجبة وهو في الطريق إليك 🚴‍♂️";
+    order.assignedDriver = { name: driverName, phone: driverPhone };
+    writeDB(db);
+
+    res.json({ success: true, message: "✅ تم تأكيد كود الاستلام بنجاح، يمكنك الانطلاق نحو الزبون!", order });
 });
 
 app.put('/api/orders/:id/status', (req, res) => {
@@ -269,7 +277,7 @@ app.put('/api/orders/:id/status', (req, res) => {
     res.json({ success: true, order });
 });
 
-app.get('/', (req, res) => res.json({ message: "سيرفر زادلي شغال ومطور بنظام إدارة الصلاحيات والمنيو الحي 🚀" }));
+app.get('/', (req, res) => res.json({ message: "سيرفر زادلي شغال بنظام كود الاستلام والربط المالي بين المطعم والسائق 🚀" }));
 
 app.listen(PORT, () => {
     console.log(`🚀 السيرفر شغال بنجاح على المنفذ: ${PORT}`);
