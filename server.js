@@ -16,26 +16,28 @@ app.use(express.urlencoded({ limit: '25mb', extended: true }));
 
 function readDB() {
     if (!fs.existsSync(DB_FILE)) {
-        const initialData = { users: [], orders: [], meals: [] };
+        const initialData = { users: [], orders: [], meals: [], topups: [] };
         fs.writeFileSync(DB_FILE, JSON.stringify(initialData, null, 2));
         return initialData;
     }
     const data = fs.readFileSync(DB_FILE, 'utf-8');
-    return JSON.parse(data);
+    const parsed = JSON.parse(data);
+    if (!parsed.topups) parsed.topups = [];
+    if (!parsed.meals) parsed.meals = [];
+    return parsed;
 }
 
 function writeDB(data) {
     fs.writeFileSync(DB_FILE, JSON.stringify(data, null, 2));
 }
 
-// دالة فحص هل السائق في شهره الأول المجاني (أقل من 30 يوماً)
+// دالة فحص الشهر الأول المجاني للسائق (30 يوماً من تاريخ التسجيل)
 function isDriverInFreeMonth(driverCreatedAt) {
     if (!driverCreatedAt) return true;
     const regDate = new Date(driverCreatedAt);
     const now = new Date();
-    const diffTime = Math.abs(now - regDate);
-    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-    return diffDays <= 30; // true إذا كان في أول 30 يوماً
+    const diffDays = Math.ceil(Math.abs(now - regDate) / (1000 * 60 * 60 * 24));
+    return diffDays <= 30;
 }
 
 const defaultMeals = [
@@ -78,9 +80,20 @@ const defaultMeals = [
 ];
 
 // ==========================================
-// 1. مسارات الحسابات والأمان
+// 1. مسار لوحة الإدارة
 // ==========================================
+app.get('/admin', (req, res) => {
+    const adminPath = path.join(__dirname, 'admin.html');
+    if (fs.existsSync(adminPath)) {
+        res.sendFile(adminPath);
+    } else {
+        res.send("لوحة الإدارة: تأكد من رفع ملف admin.html بجانب server.js");
+    }
+});
 
+// ==========================================
+// 2. الحسابات وتسجيل الدخول
+// ==========================================
 app.post('/api/auth/register', async (req, res) => {
     try {
         const { name, phone, password, role, extraInfo } = req.body;
@@ -100,6 +113,11 @@ app.post('/api/auth/register', async (req, res) => {
             password: hashedPassword,
             role: assignedRole,
             isApproved: isApproved,
+            wallet: {
+                balance: 0, // رصيد المحفظة المشحون ببريدي موب
+                totalEarned: 0,
+                totalOrders: 0
+            },
             extraInfo: extraInfo || {},
             createdAt: new Date().toISOString()
         };
@@ -136,8 +154,6 @@ app.post('/api/auth/login', async (req, res) => {
         }
 
         const token = jwt.sign({ id: user.id, name: user.name, role: user.role }, JWT_SECRET, { expiresIn: '7d' });
-        
-        // التحقق من حالة العرض الترويجي للسائق
         const isPromoActive = user.role === 'driver' ? isDriverInFreeMonth(user.createdAt) : false;
 
         res.json({
@@ -148,6 +164,7 @@ app.post('/api/auth/login', async (req, res) => {
                 name: user.name, 
                 phone: user.phone, 
                 role: user.role,
+                wallet: user.wallet || { balance: 0 },
                 createdAt: user.createdAt,
                 isPromoActive: isPromoActive 
             }
@@ -161,7 +178,6 @@ app.post('/api/auth/google-login', async (req, res) => {
     try {
         const { email, name, googleId } = req.body;
         const db = readDB();
-
         let user = db.users.find(u => u.email === email || (u.extraInfo && u.extraInfo.googleId === googleId));
 
         if (!user) {
@@ -173,6 +189,7 @@ app.post('/api/auth/google-login', async (req, res) => {
                 password: "google_secured_login",
                 role: 'customer',
                 isApproved: true,
+                wallet: { balance: 0 },
                 extraInfo: { googleId: googleId, authProvider: 'google' },
                 createdAt: new Date().toISOString()
             };
@@ -192,7 +209,57 @@ app.post('/api/auth/google-login', async (req, res) => {
 });
 
 // ==========================================
-// 2. مسارات الإدارة وسقف الديون (Admin API)
+// 3. المحرك المالي وشحن الرصيد بـ BaridiMob
+// ==========================================
+
+// مسار إرسال وصل شحن الرصيد من طرف السائق أو المطعم
+app.post('/api/wallet/topup', (req, res) => {
+    try {
+        const { phone, amount, transactionId, receiptImage } = req.body;
+        const db = readDB();
+
+        const user = db.users.find(u => u.phone === phone);
+        if (!user) return res.status(404).json({ success: false, message: "المستخدم غير موجود!" });
+
+        const newTopup = {
+            id: db.topups.length + 1,
+            userId: user.id,
+            userName: user.name,
+            phone: user.phone,
+            role: user.role,
+            amount: parseInt(amount) || 1000,
+            transactionId: transactionId || "غير محدد",
+            receiptImage: receiptImage || null,
+            status: "pending",
+            createdAt: new Date().toISOString()
+        };
+
+        db.topups.unshift(newTopup);
+        writeDB(db);
+
+        res.status(201).json({
+            success: true,
+            message: "تم إرسال وصل بريدي موب بنجاح! سيتم شحن رصيدك فور مراجعة الإدارة للتحويل."
+        });
+    } catch (err) {
+        res.status(500).json({ success: false, message: "فشل إرسال طلب الشحن" });
+    }
+});
+
+// جلب رصيد المحفظة الحالي
+app.get('/api/wallet/balance/:phone', (req, res) => {
+    const db = readDB();
+    const user = db.users.find(u => u.phone === req.params.phone);
+    if (!user) return res.status(404).json({ success: false, message: "غير موجود" });
+
+    res.json({
+        balance: (user.wallet && user.wallet.balance) ? user.wallet.balance : 0,
+        isPromoActive: user.role === 'driver' ? isDriverInFreeMonth(user.createdAt) : false
+    });
+});
+
+// ==========================================
+// 4. مسارات لوحة الإدارة (Admin)
 // ==========================================
 
 app.get('/api/admin/pending-users', (req, res) => {
@@ -212,23 +279,34 @@ app.put('/api/admin/approve-user/:id', (req, res) => {
     res.json({ success: true, message: `تم تفعيل حساب ${user.name} بنجاح! ✅` });
 });
 
-// مسار تصفير ديون السائق بعد تسديده عبر BaridiMob
-app.put('/api/admin/reset-debt/:phone', (req, res) => {
-    const phone = req.params.phone;
+// جلب طلبات شحن بريدي موب بانتظار التأكيد
+app.get('/api/admin/pending-topups', (req, res) => {
     const db = readDB();
-    const user = db.users.find(u => u.phone === phone);
-    if (!user) return res.status(404).json({ success: false, message: "السائق غير موجود" });
+    const pending = db.topups.filter(t => t.status === 'pending');
+    res.json({ count: pending.length, topups: pending });
+});
 
-    if (!user.wallet) user.wallet = {};
-    user.wallet.platformDebt = 0; // تصفير الدين
-    user.wallet.isBlocked = false; // فك الحظر
+// تأكيد وصول الأموال وشحن رصيد المحفظة
+app.put('/api/admin/approve-topup/:id', (req, res) => {
+    const topupId = parseInt(req.params.id);
+    const db = readDB();
+    const topup = db.topups.find(t => t.id === topupId);
+    if (!topup) return res.status(404).json({ success: false, message: "طلب الشحن غير موجود!" });
+
+    const user = db.users.find(u => u.phone === topup.phone);
+    if (user) {
+        if (!user.wallet) user.wallet = { balance: 0 };
+        user.wallet.balance = (user.wallet.balance || 0) + topup.amount;
+    }
+
+    topup.status = 'approved';
     writeDB(db);
 
-    res.json({ success: true, message: `تم تصفير ديون الكابتن ${user.name} وتفعيل حسابه بنجاح! 💳` });
+    res.json({ success: true, message: `تم شحن ${topup.amount} د.ج في محفظة الكابتن ${topup.userName} بنجاح! 💳✅` });
 });
 
 // ==========================================
-// 3. مسارات المنيو
+// 5. المنيو والطلبات (مع حساب نسب 15% و 10%)
 // ==========================================
 
 app.get('/api/meals', (req, res) => {
@@ -267,24 +345,18 @@ app.post('/api/meals', (req, res) => {
     }
 });
 
-// ==========================================
-// 4. المحرك المالي والطلبات (15% مطعم - 10% سائق مع الشهر المجاني)
-// ==========================================
-
 app.post('/api/orders', (req, res) => {
     const { customerName, phone, mealName, address, totalPrice, restaurantPhone } = req.body;
     const db = readDB();
 
     const rawMealPrice = parseInt(totalPrice) || 750;
-    const deliveryFee = 200; // أجر التوصيل الأساسي
+    const deliveryFee = 200;
     const totalCashToCollect = rawMealPrice + deliveryFee;
 
-    // 1. حساب حصة المطعم (خصم 15% عمولة المنصة)
-    const restaurantCommissionRate = 0.15; // 15%
-    const platformFromRestaurant = Math.round(rawMealPrice * restaurantCommissionRate);
-    const restaurantNet = rawMealPrice - platformFromRestaurant; // 85% للمطعم
+    // نسبة المطعم: 15% عمولة المنصة و 85% للمطعم
+    const platformFromRestaurant = Math.round(rawMealPrice * 0.15);
+    const restaurantNet = rawMealPrice - platformFromRestaurant;
 
-    // كود الاستلام السري
     const pickupCode = Math.floor(1000 + Math.random() * 9000).toString();
 
     const newOrder = {
@@ -297,14 +369,14 @@ app.post('/api/orders', (req, res) => {
         totalPrice: `${totalCashToCollect} د.ج`,
         financials: {
             rawMealPrice: `${rawMealPrice} د.ج`,
-            restaurantNet: `${restaurantNet} د.ج`, // صافي المطعم (85%)
-            restaurantCommission: `${platformFromRestaurant} د.ج`, // عمولة 15%
+            restaurantNet: `${restaurantNet} د.ج`,
+            restaurantCommission: `${platformFromRestaurant} د.ج`,
             deliveryFee: `${deliveryFee} د.ج`,
             totalCash: `${totalCashToCollect} د.ج`
         },
         restaurantPhone: restaurantPhone || "0550112233",
         assignedDriver: null,
-        driverFinancials: null, // يُحسب فور استلام السائق بناءً على تاريخ حسابه
+        driverFinancials: null,
         status: "قيد التحضير في المطبخ 👨‍🍳",
         time: new Date().toLocaleTimeString('ar-DZ')
     };
@@ -320,7 +392,6 @@ app.get('/api/orders', (req, res) => {
     res.json({ orders: db.orders });
 });
 
-// التحقق من كود الاستلام وحساب عمولة السائق (0% في أول شهر أو 10% بعده)
 app.put('/api/orders/:id/pickup-verify', (req, res) => {
     const orderId = parseInt(req.params.id);
     const { enteredCode, driverName, driverPhone } = req.body;
@@ -333,13 +404,12 @@ app.put('/api/orders/:id/pickup-verify', (req, res) => {
         return res.status(400).json({ success: false, message: "❌ كود الاستلام غير صحيح! تأكد من المطعم." });
     }
 
-    // جلب بيانات السائق لفحص هل هو في الشهر الأول المجاني
     const driver = db.users.find(u => u.phone === driverPhone);
     const isFreeMonth = isDriverInFreeMonth(driver ? driver.createdAt : null);
 
     const deliveryFee = 200;
-    // إذا كان في الشهر الأول 0% عمولة، بعد الشهر الأول 10%
-    const driverCommission = isFreeMonth ? 0 : Math.round(deliveryFee * 0.10); // 20 د.ج بعد الشهر الأول
+    // الشهر الأول 0%، بعده 10%
+    const driverCommission = isFreeMonth ? 0 : Math.round(deliveryFee * 0.10);
     const driverNet = deliveryFee - driverCommission;
 
     order.status = "المندوب استلم الوجبة وهو في الطريق إليك 🚴‍♂️";
@@ -356,7 +426,7 @@ app.put('/api/orders/:id/pickup-verify', (req, res) => {
     res.json({
         success: true,
         message: isFreeMonth 
-            ? "✅ تم تأكيد الكود! (عرض الشهر الأول مجاناً: ربحك 100% بدون عمولة للمنصة 🎉)" 
+            ? "✅ تم تأكيد الكود! (عرض الشهر الأول: أرباحك 100% بدون أي عمولة للمنصة 🎉)" 
             : "✅ تم تأكيد الكود! (اقتطاع 10% عمولة المنصة)",
         order
     });
@@ -371,13 +441,24 @@ app.put('/api/orders/:id/status', (req, res) => {
     if (!order) return res.status(404).json({ success: false, message: "الطلب غير موجود!" });
 
     order.status = newStatus;
-    writeDB(db);
 
+    // عند اكتمال تسليم الوجبة بنجاح: خصم عمولة السائق من محفظته المشحونة مسبقاً
+    if (newStatus.includes("تسليم") && order.driverFinancials) {
+        const comm = parseInt(order.driverFinancials.driverCommission) || 0;
+        if (comm > 0 && order.assignedDriver) {
+            const driver = db.users.find(u => u.phone === order.assignedDriver.phone);
+            if (driver && driver.wallet) {
+                driver.wallet.balance = Math.max(0, (driver.wallet.balance || 0) - comm);
+            }
+        }
+    }
+
+    writeDB(db);
     res.json({ success: true, order });
 });
 
 app.get('/', (req, res) => {
-    res.json({ message: "سيرفر زادلي المالي شغال: 15% للمطعم و 10% للسائق مع الشهر الأول المجاني 🚀💰" });
+    res.json({ message: "سيرفر زادلي المالي المطور شغال بنظام تحويلات BaridiMob والمحافظ الرقمية 🚀💳" });
 });
 
 app.listen(PORT, () => {
